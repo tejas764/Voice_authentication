@@ -8,7 +8,7 @@ import streamlit as st
 import parameters as p
 from auth_service import VoiceAuthService
 
-st.set_page_config(page_title="Voice Authentication", layout="wide")
+st.set_page_config(page_title="Voice Authentication", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown(
     """
@@ -61,6 +61,30 @@ st.markdown(
             border-radius: 14px;
             padding: 12px 16px;
             box-shadow: 0 8px 20px rgba(16, 42, 67, 0.08);
+        }
+
+        .panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 14px;
+            box-shadow: 0 8px 20px rgba(16, 42, 67, 0.07);
+        }
+
+        label[data-testid="stWidgetLabel"] p {
+            color: var(--ink) !important;
+        }
+
+        .stTextInput input,
+        div[data-baseweb="input"] input {
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+        }
+
+        .stTextInput input::placeholder,
+        div[data-baseweb="input"] input::placeholder {
+            color: #6b7b8c !important;
+            opacity: 1;
         }
 
         @keyframes fadeIn {
@@ -127,14 +151,13 @@ with tab_enroll:
     if st.button("Enroll User", type="primary"):
         if not name.strip() or not register_number.strip():
             st.error("Please provide both name and register number.")
+        elif enroll_file is None and live_audio is None:
+            st.error("Please upload an audio file or record a live sample.")
         else:
-            if enroll_file is None and live_audio is None:
-                st.error("Please upload an audio file or record a live sample.")
-                st.stop()
-
             temp_path = save_uploaded_file(enroll_file) if enroll_file is not None else save_audio_bytes_to_wav(live_audio.getvalue())
             try:
-                service.enroll_person(name.strip(), register_number.strip(), temp_path)
+                with st.spinner("Extracting voiceprint and saving enrollment..."):
+                    service.enroll_person(name.strip(), register_number.strip(), temp_path)
                 st.success(f"Enrolled '{name.strip()}' ({register_number.strip()}) successfully.")
                 st.rerun()
             except Exception as exc:
@@ -153,7 +176,8 @@ with tab_enroll:
         else:
             temp_csv = save_uploaded_file(csv_file)
             try:
-                total = service.enroll_csv(temp_csv)
+                with st.spinner("Processing CSV and enrolling speakers..."):
+                    total = service.enroll_csv(temp_csv)
                 st.success(f"Enrolled {total} users from CSV.")
                 st.rerun()
             except Exception as exc:
@@ -173,7 +197,9 @@ with tab_recognize:
         else:
             temp_path = save_uploaded_file(rec_file) if rec_file is not None else save_audio_bytes_to_wav(rec_live_audio.getvalue())
             try:
-                result = service.recognize(temp_path)
+                with st.spinner("Analyzing voice sample..."):
+                    result = service.recognize(temp_path)
+
                 if result["accepted"]:
                     matched = result.get("matched_user")
                     if matched:
@@ -191,16 +217,32 @@ with tab_recognize:
                     [{"speaker": k, "distance": v} for k, v in result["distances"].items()]
                 ).sort_values("distance", ascending=True)
                 distances["display"] = distances["speaker"]
+
                 users_df = service.list_enrolled_user_details()
                 if not users_df.empty:
-                    merged = distances.merge(users_df[["speaker_key", "name", "register_number"]], left_on="speaker", right_on="speaker_key", how="left")
-                    merged["display"] = merged.apply(
-                        lambda row: f"{row['name']} ({row['register_number']})" if pd.notna(row.get("name")) else row["speaker"],
-                        axis=1,
+                    merged = distances.merge(
+                        users_df[["speaker_key", "name", "register_number"]],
+                        left_on="speaker",
+                        right_on="speaker_key",
+                        how="left",
+                    )
+                    mask = merged["name"].notna() & merged["register_number"].notna()
+                    merged.loc[mask, "display"] = (
+                        merged.loc[mask, "name"].astype(str)
+                        + " ("
+                        + merged.loc[mask, "register_number"].astype(str)
+                        + ")"
                     )
                     distances = merged[["display", "distance"]]
                     distances.columns = ["speaker", "distance"]
-                st.dataframe(distances, use_container_width=True)
+
+                top_n = distances.head(5).copy()
+                st.markdown("<div class='panel'>", unsafe_allow_html=True)
+                st.dataframe(distances, use_container_width=True, height=280)
+                if not top_n.empty:
+                    st.caption("Top match scores")
+                    st.bar_chart(top_n.set_index("speaker"))
+                st.markdown("</div>", unsafe_allow_html=True)
             except Exception as exc:
                 st.error(f"Recognition failed: {exc}")
             finally:
@@ -216,4 +258,4 @@ with tab_manage:
         view = users_df[["name", "register_number", "created_at"]].rename(
             columns={"name": "Name", "register_number": "Register Number", "created_at": "Enrolled At"}
         )
-        st.dataframe(view, use_container_width=True)
+        st.dataframe(view, use_container_width=True, height=320)

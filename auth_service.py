@@ -1,7 +1,8 @@
 import datetime as dt
+import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -10,28 +11,45 @@ import parameters as p
 from feature_extraction import get_embedding
 from model_utils import load_voice_model
 
+logger = logging.getLogger(__name__)
+
 
 class VoiceAuthService:
+    """
+    Service for voice authentication using CNN embeddings.
+
+    Handles enrollment of users, recognition of speakers, and management
+    of voice embeddings with efficient caching.
+    """
+
     def __init__(self, model_file: str = p.MODEL_FILE, embed_dir: str = p.EMBED_LIST_FILE):
         self.model_file = model_file
         self.embed_dir = Path(embed_dir)
         self.embed_dir.mkdir(parents=True, exist_ok=True)
         self.meta_file = self.embed_dir / "users.csv"
+
+        # Caching for metadata
         self._metadata_cache: Optional[pd.DataFrame] = None
         self._metadata_mtime: Optional[float] = None
+
+        # Caching for embeddings
         self._embed_cache_names: List[str] = []
         self._embed_cache_matrix: np.ndarray = np.empty((0, 0), dtype=np.float32)
         self._embed_cache_mtimes: Dict[str, float] = {}
-        self._embed_cache_valid = False
+        self._embed_cache_valid: bool = False
+
+        # Load model
         self.model = load_voice_model(model_file)
         self._ensure_metadata()
 
     def _ensure_metadata(self) -> None:
+        """Ensure metadata file exists with proper structure."""
         if not self.meta_file.exists():
             df = pd.DataFrame(columns=["speaker_key", "name", "register_number", "file", "created_at"])
             df.to_csv(self.meta_file, index=False)
 
     def _load_metadata(self) -> pd.DataFrame:
+        """Load metadata with caching based on file modification time."""
         self._ensure_metadata()
         mtime = self.meta_file.stat().st_mtime
         if self._metadata_cache is not None and self._metadata_mtime == mtime:
@@ -41,14 +59,22 @@ class VoiceAuthService:
         return self._metadata_cache.copy()
 
     def _save_metadata(self, df: pd.DataFrame) -> None:
+        """Save metadata and update cache."""
         df.to_csv(self.meta_file, index=False)
         self._metadata_cache = df.copy()
         self._metadata_mtime = self.meta_file.stat().st_mtime
 
     def _invalidate_embed_cache(self) -> None:
+        """Mark embedding cache as invalid."""
         self._embed_cache_valid = False
 
     def _refresh_embed_cache_if_needed(self) -> Tuple[List[str], np.ndarray]:
+        """
+        Refresh embedding cache if files have changed.
+
+        Returns:
+            Tuple of (speaker names, embedding matrix)
+        """
         files = sorted([f for f in self.embed_dir.glob("*.npy") if f.is_file()])
         current_mtimes = {f.stem: f.stat().st_mtime for f in files}
 
@@ -65,10 +91,7 @@ class VoiceAuthService:
             names.append(f.stem)
             vectors.append(vector)
 
-        if vectors:
-            matrix = np.vstack(vectors)
-        else:
-            matrix = np.empty((0, 0), dtype=np.float32)
+        matrix = np.vstack(vectors) if vectors else np.empty((0, 0), dtype=np.float32)
 
         self._embed_cache_names = names
         self._embed_cache_matrix = matrix
@@ -78,24 +101,29 @@ class VoiceAuthService:
 
     @staticmethod
     def _normalize(text: str) -> str:
+        """Normalize text for safe file naming."""
         normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", text.strip())
         normalized = re.sub(r"_+", "_", normalized).strip("_")
         return normalized or "user"
 
     def _speaker_key(self, name: str, register_number: str) -> str:
+        """Generate a unique speaker key from name and register number."""
         return f"{self._normalize(name)}__{self._normalize(register_number)}"
 
     def list_enrolled_users(self) -> List[str]:
+        """List all enrolled speaker keys."""
         names, _ = self._refresh_embed_cache_if_needed()
         return names
 
     def list_enrolled_user_details(self) -> pd.DataFrame:
+        """Get detailed information about enrolled users."""
         df = self._load_metadata()
         if df.empty:
             return df
         return df.sort_values("created_at", ascending=False)
 
     def get_user_by_speaker_key(self, speaker_key: str) -> Optional[Dict[str, str]]:
+        """Get user details by speaker key."""
         df = self._load_metadata()
         match = df[df["speaker_key"] == speaker_key]
         if match.empty:
@@ -109,6 +137,17 @@ class VoiceAuthService:
         }
 
     def enroll_person(self, name: str, register_number: str, audio_path: str) -> Dict[str, str]:
+        """
+        Enroll a person with name, register number, and audio file.
+
+        Args:
+            name: User's name
+            register_number: Unique register number
+            audio_path: Path to audio file
+
+        Returns:
+            Dict with speaker_key and file path
+        """
         if not register_number or not register_number.strip():
             raise ValueError("Register number is required for enrollment.")
         speaker_key = self._speaker_key(name, register_number)
@@ -127,6 +166,16 @@ class VoiceAuthService:
         return {"speaker_key": speaker_key, "file": out_path}
 
     def enroll(self, name: str, audio_path: str) -> str:
+        """
+        Enroll a speaker with audio file.
+
+        Args:
+            name: Speaker identifier
+            audio_path: Path to audio file
+
+        Returns:
+            Path to saved embedding file
+        """
         if not name or not name.strip():
             raise ValueError("Name is required for enrollment.")
         embedding = get_embedding(self.model, audio_path, p.MAX_SEC)
@@ -136,6 +185,15 @@ class VoiceAuthService:
         return str(out_path)
 
     def enroll_csv(self, csv_path: str) -> int:
+        """
+        Enroll users from CSV file.
+
+        Args:
+            csv_path: Path to CSV with filename and speaker columns
+
+        Returns:
+            Number of users enrolled
+        """
         df = pd.read_csv(csv_path)
         columns = [c.lower() for c in df.columns]
 
@@ -156,7 +214,16 @@ class VoiceAuthService:
             count += 1
         return count
 
-    def recognize(self, audio_path: str) -> Dict[str, object]:
+    def recognize(self, audio_path: str) -> Dict[str, Any]:
+        """
+        Recognize speaker from audio file.
+
+        Args:
+            audio_path: Path to audio file to recognize
+
+        Returns:
+            Dict with recognition results including accepted, speaker, score, etc.
+        """
         speaker_names, enroll_matrix = self._refresh_embed_cache_if_needed()
         if not speaker_names:
             raise RuntimeError("No enrolled users found. Enroll at least one user first.")

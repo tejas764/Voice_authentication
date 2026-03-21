@@ -1,8 +1,9 @@
 import os
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable, Optional
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "1")
 
 import numpy as np
 import tensorflow as tf
@@ -16,11 +17,11 @@ class LoadedModel:
     """Small adapter that gives a unified predict interface."""
 
     predict_fn: Callable[[np.ndarray], np.ndarray]
+    runtime_handle: Optional[Any] = None
 
     def predict_embedding(self, model_input: np.ndarray) -> np.ndarray:
         output = self.predict_fn(model_input.astype(np.float32, copy=False))
-        embedding = np.squeeze(output)
-        embedding = embedding.astype(np.float32, copy=False)
+        embedding = np.squeeze(output).astype(np.float32, copy=False)
         norm = np.linalg.norm(embedding)
         if norm > 0:
             embedding = embedding / norm
@@ -37,7 +38,7 @@ def _keras_predictor(model) -> Callable[[np.ndarray], np.ndarray]:
     return _predict
 
 
-def _saved_model_predictor(model_dir: str) -> Callable[[np.ndarray], np.ndarray]:
+def _saved_model_predictor(model_dir: str) -> tuple[Callable[[np.ndarray], np.ndarray], Any]:
     loaded = tf.saved_model.load(model_dir)
     infer = loaded.signatures["serving_default"]
 
@@ -46,7 +47,7 @@ def _saved_model_predictor(model_dir: str) -> Callable[[np.ndarray], np.ndarray]
         first_tensor = next(iter(output.values()))
         return first_tensor.numpy()
 
-    return _predict
+    return _predict, loaded
 
 
 def load_voice_model(model_dir: str) -> LoadedModel:
@@ -56,6 +57,7 @@ def load_voice_model(model_dir: str) -> LoadedModel:
 
     try:
         keras_model = tf.keras.models.load_model(model_dir, compile=False)
-        return LoadedModel(predict_fn=_keras_predictor(keras_model))
+        return LoadedModel(predict_fn=_keras_predictor(keras_model), runtime_handle=keras_model)
     except Exception:
-        return LoadedModel(predict_fn=_saved_model_predictor(model_dir))
+        predict_fn, loaded = _saved_model_predictor(model_dir)
+        return LoadedModel(predict_fn=predict_fn, runtime_handle=loaded)
