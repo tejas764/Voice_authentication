@@ -1,0 +1,7 @@
+librosa
+scipy
+numpy
+python_speech_features
+tensorflow
+pandas
+streamlit
