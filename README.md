@@ -2,6 +2,8 @@
 
 Voice authentication system using pre-trained CNN embeddings, optimized for modern TensorFlow/Keras and packaged with a user-friendly Streamlit interface.
 
+[Features](#features) · [Setup](#requirements) · [Web UI](#run-web-ui) · [CLI](#cli-usage) · [Configuration](#configuration)
+
 ## Features
 - Voice enrollment using `Name + Register Number`
 - Live microphone recording in UI (no manual file conversion required)
@@ -21,7 +23,15 @@ Voice authentication system using pre-trained CNN embeddings, optimized for mode
 - Python 3.10+
 - Windows/macOS/Linux
 
-Install dependencies:
+Clone the repository and create an isolated environment:
+
+```bash
+git clone https://github.com/tejas764/Voice_authentication.git
+cd Voice_authentication
+python -m venv .venv
+```
+
+Activate it with `.venv\\Scripts\\Activate.ps1` in PowerShell or `source .venv/bin/activate` on macOS/Linux. Then install dependencies:
 ```bash
 python -m pip install -r requirements.txt
 ```
@@ -65,3 +75,9 @@ Tune in `parameters.py`:
 - Model files are loaded from `voice_auth_model_cnn/`.
 - Enrolled vectors are stored as `.npy` files in `data/embed/`.
 - User metadata for UI identity display is stored in `data/embed/users.csv`.
+
+## Validation and limitations
+
+Enroll a consenting test speaker and compare recordings from the same and a different speaker. Evaluate thresholds across microphones and background noise before drawing conclusions. Similarity scores are not proof of identity; this prototype does not establish replay or synthetic-voice resistance.
+
+Voice recordings, embeddings, and registration numbers are personal data. Use consented test data and keep enrollment files out of public contributions. Dependency versions are unpinned; TensorFlow compatibility depends on Python and operating system.
